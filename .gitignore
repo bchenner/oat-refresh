@@ -1,0 +1,14 @@
+# Secrets. Never commit these.
+.env
+.env.*
+!.env.example
+.dev.vars
+*.pem
+*.key
+
+# Python bytecode embeds absolute source paths — it leaked the local
+# username and worker URL in an earlier audit.
+__pycache__/
+*.pyc
+
+.DS_Store
