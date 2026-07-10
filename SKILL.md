@@ -79,6 +79,33 @@ On macOS/Linux use `python3` if `python` is not on PATH.
 5. **Report** to the user: creators added, handles added, rows skipped, videos
    captured vs claimed per account, and how many new videos landed.
 
+## What a refresh keeps current
+
+One sync refreshes the whole dashboard from the same scraped data — you do not
+run anything per-feature:
+
+- **Leaderboard & podium**, and team stats: posts, team views, avg engagement,
+  and **total followers**.
+- **Creator detail** — views, **virality** (share of a creator's posts that
+  clear 100K views), **share rate** (shares ÷ views), comment/view averages,
+  percentile-vs-team, and the posting heatmap.
+- **Video detail** — per-video views / likes / comments / shares / saves. The
+  "Views over time" curve is built from the **daily snapshot history**, so it
+  fills in over repeated syncs (or the 08:00 UTC cron); a single sync gives one
+  point.
+- **Challenge races** — the *500K-view* and *15-post* races recompute live from
+  the videos posted inside each challenge's window. No admin action needed; a
+  sync is enough. Each race has exactly one winner (first to reach the goal).
+
+What a refresh does **not** touch:
+
+- **Challenge configuration** — dates, prizes, tiers, and public copy live in the
+  worker's `src/challenges.config.js`. Changing a challenge is a worker edit +
+  redeploy, not this skill. Because the dashboard is public, only commit prize
+  amounts and rules you'll stand behind.
+- **GMV / TikTok Shop** — not scrapeable. GMV milestones are reported to an admin
+  and shown from config; the skill never sees GMV numbers.
+
 ## Reading the output
 
 The script prints a plan, then a scrape table. Things that need a human:

@@ -1,9 +1,12 @@
 # Worker API contract
 
-The skill needs a deployed OAT Overview worker. These are the only routes it
-touches. Any backend implementing them will work.
+The skill needs a deployed OAT Overview worker. The **admin + team routes below
+are the only ones the skill calls**; the read routes at the end are what the
+scraped data powers on the dashboard (listed for completeness — the skill does
+not call them).
 
-`/api/admin/*` requires `Authorization: Bearer $OAT_ADMIN_TOKEN`.
+`/api/admin/*` requires `Authorization: Bearer $OAT_ADMIN_TOKEN`. Everything
+under `/api/team/*`, `/api/video/*`, and `/api/challenges` is public read.
 
 ## `GET /api/admin/state`
 
@@ -59,14 +62,34 @@ cannot pass for a complete one.
 - `truncated` — the page budget ran out with more to fetch. Raise
   `SCRAPE_MAX_PAGES` and redeploy.
 
-## `GET /api/team/period?span=all`
+## `GET /api/team/period?span=week|month|year|all&start=YYYY-MM-DD`
 
-Public read. The script uses only `stats.posts`, before and after the scrape, to
-report how many new videos landed.
+Public read — the whole dashboard for a period. The script uses only
+`stats.posts`, before and after the scrape, to report how many new videos landed.
+The full payload also carries per-creator aggregates (views, virality, share
+rate, percentile inputs), per-creator top videos, and the account rollup.
 
 ```json
-{"stats": {"posts": 349, "views": 45276359, "creators": 2, "accounts": 2}}
+{"stats": {"posts": 349, "views": 45276359, "followers": 296454,
+           "eng": 1.3, "creators": 6, "accounts": 7}}
 ```
 
-> This route is unauthenticated in the reference worker. If your roster is not
-> meant to be public, put access control in front of it — see the README.
+`start` is any date inside the wanted period; the server snaps it to the boundary.
+`span=all` runs from the first tracked post to today.
+
+## Read routes the skill does **not** call
+
+Listed so the contract is complete. These are what the scraped data powers on the
+dashboard — no admin token needed.
+
+- `GET /api/video/:id` — one video's detail: latest view/like/comment/share/save
+  counts plus its snapshot history (the "views over time" curve). The history
+  grows one point per sync, so it fills in over time.
+- `GET /api/challenges` — challenge standings. The *races* (views, posts) are
+  computed live from scraped videos within each challenge's window; the *GMV*
+  tier is config-only (GMV is not scrapeable). Definitions live in the worker's
+  `src/challenges.config.js`, not here.
+
+> `/api/team/*`, `/api/video/*`, and `/api/challenges` are unauthenticated in the
+> reference worker. If your roster is not meant to be public, put access control
+> in front of them — see the README.
