@@ -46,23 +46,35 @@ On macOS/Linux use `python3` if `python` is not on PATH.
    The roster is typically a Google Form response set, so its columns drift as
    the form is edited. Find columns by meaning, not position:
    - the person's name
-   - their TikTok link(s) — the column is usually plural; one respondent may
-     list several handles
+   - their TikTok link(s) — often **one column per account** (Account #1, #2, …);
+     one respondent may have several
+   - the **"date of first Salvora video" paired with each account** — the day
+     that account started posting Salvora content. Videos posted **before** this
+     date are ignored everywhere (leaderboard, challenges, stats). Pair each date
+     with its own account link, not the person.
 
    **Do not read any phone-number, email, or address column.** The dashboard
    has no use for personal contact details and they must never reach the
    database, the logs, or the repo.
 
 2. **Write `rows.json`** to a scratchpad — one entry per respondent, verbatim
-   names, every TikTok link they gave. Respondents who wrote `N/A` get an empty
-   list; pass them through anyway so the script reports them as skipped.
+   names, and an `accounts` list pairing each TikTok link with its start date.
+   Convert the sheet's `M/D/YYYY` to ISO **`YYYY-MM-DD`**; use `null` when a date
+   is blank. Respondents with no link get an empty/`N/A` account; pass them
+   through anyway so the script reports them as skipped.
 
    ```json
    [
-     {"name": "Ana Torres",  "urls": ["https://www.tiktok.com/@ana.creates"]},
-     {"name": "Marco Silva", "urls": []}
+     {"name": "Ana Torres", "accounts": [
+       {"url": "https://www.tiktok.com/@ana.creates", "since": "2026-05-29"},
+       {"url": "https://www.tiktok.com/@ana.backup",  "since": "2026-07-02"}
+     ]},
+     {"name": "Marco Silva", "accounts": [{"url": "N/A", "since": null}]}
    ]
    ```
+
+   (The legacy `{"name": ..., "urls": [...]}` shape still works — those accounts
+   just get no cutoff.)
 
 3. **Preview the plan:**
 
@@ -76,8 +88,11 @@ On macOS/Linux use `python3` if `python` is not on PATH.
 
    Add `--no-sync` to reconcile without spending scrape credits.
 
-5. **Report** to the user: creators added, handles added, rows skipped, videos
-   captured vs claimed per account, and how many new videos landed.
+5. **Report** to the user: creators added, handles added, **start dates set**
+   (`~ since @handle old -> new`), rows skipped, videos captured vs claimed per
+   account, and how many new videos landed. Setting a start date is applied at
+   read time — it takes effect immediately, no re-scrape needed, so `--no-sync`
+   is enough when the sheet only changed dates.
 
 ## What a refresh keeps current
 

@@ -52,6 +52,32 @@ class TestExtractHandles(unittest.TestCase):
         self.assertEqual(oat.extract_handles(["https://instagram.com/someone"]), [])
 
 
+class TestExtractAccounts(unittest.TestCase):
+    def test_dated_accounts_shape(self):
+        row = {"name": "Kier", "accounts": [
+            {"url": "https://www.tiktok.com/@kier7292", "since": "2026-07-02"},
+            {"url": "https://www.tiktok.com/@kier.faith", "since": "2026-07-06"},
+        ]}
+        self.assertEqual(oat.extract_accounts(row), [
+            {"handle": "kier7292", "since": "2026-07-02"},
+            {"handle": "kier.faith", "since": "2026-07-06"},
+        ])
+
+    def test_legacy_urls_have_no_since(self):
+        row = {"name": "Ana", "urls": ["https://www.tiktok.com/@ana"]}
+        self.assertEqual(oat.extract_accounts(row), [{"handle": "ana", "since": None}])
+
+    def test_bad_date_is_dropped_not_crashing(self):
+        # Non-ISO dates (the sheet's raw M/D/YYYY, or junk) are ignored, not stored.
+        for bad in ("7/2/2026", "2026-13-99-ish", "", None, 20260702):
+            row = {"name": "X", "accounts": [{"url": "tiktok.com/@x", "since": bad}]}
+            self.assertEqual(oat.extract_accounts(row), [{"handle": "x", "since": None}])
+
+    def test_na_account_yields_nothing(self):
+        self.assertEqual(oat.extract_accounts({"name": "C", "accounts": [{"url": "N/A", "since": None}]}), [])
+        self.assertEqual(oat.extract_accounts({"name": "C", "urls": []}), [])
+
+
 class TestAlloc(unittest.TestCase):
     def test_skips_taken_ids(self):
         taken = {"a01", "a02", "a03"}

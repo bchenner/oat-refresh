@@ -7,8 +7,11 @@ better than a positional parser), diffs it against the worker's full state,
 adds whatever is missing, and runs a sync.
 
     rows.json:
-        [{"name": "Ana Torres", "urls": ["https://www.tiktok.com/@ana.creates"]},
-         {"name": "Marco Silva", "urls": []}]
+        [{"name": "Ana Torres", "accounts": [
+            {"url": "https://www.tiktok.com/@ana.creates", "since": "2026-05-29"}]},
+         {"name": "Marco Silva", "accounts": [{"url": "N/A", "since": null}]}]
+    `since` (ISO YYYY-MM-DD) is the account's first Salvora video; posts before it
+    are ignored. The legacy {"urls": [...]} shape still works (no cutoff).
 
 Additive only. Nothing is ever deleted, renamed, or reactivated: retiring a
 creator stays a deliberate manual act.
@@ -44,6 +47,7 @@ PALETTE = ["#FF3D77", "#2DE2E6", "#B481FF", "#FFC24B",
 # tiktok.com/@handle, with or without scheme/www/trailing path.
 HANDLE_RE = re.compile(r"tiktok\.com/@([A-Za-z0-9._-]+)", re.I)
 BARE_RE = re.compile(r"^@?([A-Za-z0-9._-]+)$")
+ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 PLACEHOLDERS = {"", "replace-me", "changeme", "your-token-here"}
 
@@ -207,31 +211,63 @@ def run_check(worker, token, sheet_id):
 
 # ── sheet parsing ───────────────────────────────────────────────────────────
 
-def extract_handles(urls):
-    """Pull TikTok handles out of whatever the form respondent typed."""
+def _handles_in(s):
+    """Every TikTok handle in one string (a cell may hold several links)."""
     out = []
-    for raw in urls:
-        for chunk in re.split(r"[,\s]+", str(raw or "").strip()):
-            if not chunk or chunk.upper() in {"N/A", "NA", "NONE", "-"}:
-                continue
-            m = HANDLE_RE.search(chunk)
-            if m:
-                out.append(m.group(1).lower())
-                continue
-            # Only an explicit "@handle" counts as a bare handle. Handles contain
-            # dots (e.g. ana.b.creates), so "looks like a domain" cannot tell
-            # them apart from a pasted instagram.com/... link. Anything else is
-            # ignored, and the row surfaces as skipped rather than mis-ingested.
-            if chunk.startswith("@"):
-                b = BARE_RE.match(chunk)
-                if b:
-                    out.append(b.group(1).lower())
+    for chunk in re.split(r"[,\s]+", str(s or "").strip()):
+        if not chunk or chunk.upper() in {"N/A", "NA", "NONE", "-"}:
+            continue
+        m = HANDLE_RE.search(chunk)
+        if m:
+            out.append(m.group(1).lower())
+            continue
+        # Only an explicit "@handle" counts as a bare handle. Handles contain
+        # dots (e.g. ana.b.creates), so "looks like a domain" cannot tell them
+        # apart from a pasted instagram.com/... link. Anything else is ignored,
+        # and the row surfaces as skipped rather than mis-ingested.
+        if chunk.startswith("@"):
+            b = BARE_RE.match(chunk)
+            if b:
+                out.append(b.group(1).lower())
+    return out
+
+
+def extract_handles(urls):
+    """Deduped list of handles across a list of url-strings."""
     seen, uniq = set(), []
-    for h in out:
-        if h not in seen:
-            seen.add(h)
-            uniq.append(h)
+    for raw in urls:
+        for h in _handles_in(raw):
+            if h not in seen:
+                seen.add(h)
+                uniq.append(h)
     return uniq
+
+
+def extract_accounts(row):
+    """[{handle, since}] for a row, pairing each handle with its start date.
+
+    Supports the dated shape `accounts: [{url, since}]` and the legacy
+    `urls: [str]` (since = None). `since` must be ISO YYYY-MM-DD or it's dropped.
+    """
+    entries = []
+    if isinstance(row.get("accounts"), list):
+        for a in row["accounts"]:
+            if isinstance(a, dict):
+                entries.append((a.get("url"), a.get("since")))
+            else:
+                entries.append((a, None))
+    for u in row.get("urls") or []:  # legacy, dateless
+        entries.append((u, None))
+
+    out, seen = [], set()
+    for url, since in entries:
+        s = since if (isinstance(since, str) and ISO_DATE.match(since)) else None
+        for h in _handles_in(url):
+            if h in seen:
+                continue
+            seen.add(h)
+            out.append({"handle": h, "since": s})
+    return out
 
 
 def alloc(prefix, taken, width=2):
@@ -286,15 +322,15 @@ def main():
     taken_creators = {c["id"] for c in state["creators"]}
     used_colors = {c["color"] for c in state["creators"] if c.get("color")}
 
-    new_creators, new_accounts = [], []
+    new_creators, new_accounts, since_updates = [], [], []
     skipped, retired, moved = [], [], []
 
     for row in rows:
         name = str(row.get("name", "")).strip()
         if not name:
             continue
-        handles = extract_handles(row.get("urls") or [])
-        if not handles:
+        accts = extract_accounts(row)
+        if not accts:
             skipped.append(f"{name} — no TikTok link in the sheet")
             continue
 
@@ -305,16 +341,23 @@ def main():
         # creator is worth creating. Otherwise a row whose only handle is taken
         # or retired leaves an orphan creator with no accounts behind it.
         fresh = []
-        for h in handles:
+        for acc in accts:
+            h, since = acc["handle"], acc["since"]
             existing = accounts_by_handle.get(h)
             if not existing:
-                fresh.append(h)
+                fresh.append(acc)
             elif not existing["active"]:
                 retired.append(f"@{h} ({name}) — exists but deactivated; reactivate by hand")
             elif not creator or existing["creator_id"] != creator["id"]:
                 owner = next((c["name"] for c in state["creators"]
                               if c["id"] == existing["creator_id"]), "?")
                 moved.append(f"@{h} — sheet says {name}, DB says {owner}; not moving")
+            elif since and existing.get("since_date") != since:
+                # Existing, active, same creator — refresh its Salvora start date.
+                since_updates.append({"id": existing["id"], "handle": h,
+                                      "creator_id": existing["creator_id"],
+                                      "since_date": since, "_old": existing.get("since_date")})
+                existing["since_date"] = since
 
         if not fresh:
             if not creator:
@@ -329,11 +372,15 @@ def main():
             # So two sheet rows with the same name collapse into one creator.
             creators_by_name[key] = {"id": creator_id, "name": name}
 
-        for h in fresh:
+        for acc in fresh:
             account_id = alloc("a", taken_accounts)
-            new_accounts.append({"id": account_id, "handle": h, "creator_id": creator_id,
-                                 "display_name": name})
-            accounts_by_handle[h] = {"handle": h, "active": 1, "creator_id": creator_id}
+            entry = {"id": account_id, "handle": acc["handle"], "creator_id": creator_id,
+                     "display_name": name}
+            if acc["since"]:
+                entry["since_date"] = acc["since"]
+            new_accounts.append(entry)
+            accounts_by_handle[acc["handle"]] = {"handle": acc["handle"], "active": 1,
+                                                 "creator_id": creator_id, "since_date": acc["since"]}
 
     print("=" * 62)
     print("PLAN")
@@ -341,14 +388,17 @@ def main():
     for c in new_creators:
         print(f"  + creator {c['id']}  {c['name']}")
     for a in new_accounts:
-        print(f"  + account {a['id']}  @{a['handle']}  -> {a['creator_id']}")
+        since = f"  (since {a['since_date']})" if a.get("since_date") else ""
+        print(f"  + account {a['id']}  @{a['handle']}  -> {a['creator_id']}{since}")
+    for u in since_updates:
+        print(f"  ~ since     @{u['handle']}  {u['_old'] or 'none'} -> {u['since_date']}")
     for s in skipped:
         print(f"  ~ skipped   {s}")
     for r in retired:
         print(f"  ! {r}")
     for m in moved:
         print(f"  ! {m}")
-    if not (new_creators or new_accounts):
+    if not (new_creators or new_accounts or since_updates):
         print("  (nothing new in the sheet)")
 
     if args.dry_run:
@@ -357,8 +407,13 @@ def main():
 
     if new_creators:
         api(worker, "/api/admin/creators", "POST", new_creators, token)
-    if new_accounts:
-        api(worker, "/api/admin/accounts", "POST", new_accounts, token)
+    # New accounts and since-date updates both go through the accounts upsert.
+    account_writes = new_accounts + [
+        {"id": u["id"], "handle": u["handle"], "creator_id": u["creator_id"], "since_date": u["since_date"]}
+        for u in since_updates
+    ]
+    if account_writes:
+        api(worker, "/api/admin/accounts", "POST", account_writes, token)
 
     if args.no_sync:
         print("\n--no-sync: skipped the scrape")
