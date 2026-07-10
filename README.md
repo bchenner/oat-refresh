@@ -14,12 +14,63 @@ Additive only. It never deletes a creator, never renames one, never resurrects a
 retired handle, and never moves a handle between people. Each of those is
 reported for a human to decide.
 
-## Requires
+## Requirements
 
-- Claude Code with the **Google Drive connector** enabled (to read the sheet).
-- Python 3.9+ — standard library only, nothing to install.
-- A deployed **OAT Overview worker**. The skill talks to four admin routes and
-  one public read; see [`docs/API.md`](docs/API.md) for the contract.
+**There is nothing to `pip install`.** The script imports only `argparse`,
+`json`, `os`, `pathlib`, `re`, `sys` and `urllib` — all standard library. A test
+(`TestNoDependencies`) fails the build if a third-party import ever sneaks in, so
+that promise stays true.
+
+What it does depend on:
+
+| Dependency | Version | Why | Checked by `--check` |
+|---|---|---|---|
+| Python | 3.9+ | runs the script | yes |
+| Claude Code | any recent | hosts the skill | — |
+| Google Drive connector | — | the agent reads the roster sheet through it | no — enable it in your claude.ai connector settings |
+| A deployed OAT Overview worker | — | four admin routes + one public read ([`docs/API.md`](docs/API.md)) | yes |
+| `OAT_WORKER_URL` / `OAT_ADMIN_TOKEN` | — | reach and authenticate to the worker | yes |
+| `OAT_SHEET_ID` | — | locate the roster sheet | yes |
+
+Verify everything at once, before you need it:
+
+```bash
+python scripts/oat_refresh.py --check
+```
+
+It reports the Python version, whether the config resolves, whether the worker
+is reachable, whether your admin token is accepted, **whether the admin routes
+actually reject an unauthenticated request**, and how many creators and accounts
+are live. It never prints the token. Non-zero exit means don't bother refreshing
+until you've fixed it.
+
+On macOS and Linux, use `python3` if `python` is not on your PATH.
+
+### The worker's own dependencies
+
+The skill is a client; it installs none of this. If you are standing a worker up
+from scratch, it needs:
+
+| | |
+|---|---|
+| Cloudflare account | Workers + D1 + Pages |
+| [Hono](https://hono.dev) | the worker's HTTP router |
+| [Wrangler](https://developers.cloudflare.com/workers/wrangler/) | deploy, D1 migrations, secrets |
+| A TikTok scraping API | the reference worker uses [ScrapeCreators](https://scrapecreators.com); metered, keep the key secret |
+| `ADMIN_TOKEN` secret | must equal your `OAT_ADMIN_TOKEN` |
+
+Any backend serving the five routes in [`docs/API.md`](docs/API.md) will work.
+
+## Development
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+18 offline tests. No network, no worker, no config — they run anywhere. CI runs
+them on Python 3.9 through 3.13, confirms `requirements.txt` installs nothing,
+and refuses any commit containing a real worker hostname, a `.env`, or compiled
+bytecode.
 
 ## Install
 

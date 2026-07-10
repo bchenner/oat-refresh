@@ -1,0 +1,17 @@
+# Metadata and tooling config. This is not a distributable package — the skill
+# is run as a script — so there is deliberately no [build-system].
+
+[project]
+name = "oat-refresh"
+version = "1.0.0"
+description = "Claude Code skill: sync a TikTok creator roster sheet into a dashboard, then scrape for new videos"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+
+# Intentionally empty. Standard library only — enforced by the test suite.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/bchenner/oat-refresh"
+Issues = "https://github.com/bchenner/oat-refresh/issues"

@@ -13,23 +13,34 @@ Two jobs in one pass:
 Additive only. Nothing is deleted, renamed, or reactivated automatically —
 retiring a creator stays a deliberate manual act.
 
-## Configuration
+## Dependencies
+
+Python 3.9+ and nothing else — no pip packages. The **Google Drive connector**
+must be enabled, or step 1 cannot read the sheet. A deployed OAT Overview worker
+must be reachable.
 
 Everything environment-specific lives in `.env` at the repo root (gitignored;
-copy `.env.example`). Nothing is hardcoded, so this skill points at whichever
-worker and sheet you configure.
+copy `.env.example`). Nothing is hardcoded.
 
-Get the sheet id and worker URL without exposing the token:
-
-```bash
-python scripts/oat_refresh.py --print-config
-```
-
-Requires the **Google Drive connector** to read the sheet.
+On macOS/Linux use `python3` if `python` is not on PATH.
 
 ## Do this
 
-1. **Read the sheet.** Take the `sheetId` from `--print-config`, then call
+0. **Preflight.** Run this first; it is fast and catches every dependency
+   problem before you spend scrape credits:
+
+   ```bash
+   python scripts/oat_refresh.py --check
+   ```
+
+   Exit 0 means Python, config, worker reachability, and the admin token all
+   check out. On a non-zero exit, fix what it reports and stop — do not proceed.
+   The `[WARN] public read` line is expected in the reference worker.
+
+   It also prints the `sheetId` you need next. (`--print-config` gives just the
+   config, if that is all you want. Neither ever prints the token.)
+
+1. **Read the sheet.** Take the `sheetId` from the preflight output, then call
    `mcp__claude_ai_Google_Drive__read_file_content` with it.
 
    The roster is typically a Google Form response set, so its columns drift as

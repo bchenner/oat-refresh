@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every version the project claims to support in pyproject.toml.
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: install dependencies (must be a no-op)
+        run: |
+          # Compare before/after rather than asserting an empty freeze: a runner
+          # may legitimately ship setuptools/wheel already.
+          before=$(pip freeze | sort)
+          pip install -r requirements.txt
+          after=$(pip freeze | sort)
+          if [ "$before" != "$after" ]; then
+            echo "::error::requirements.txt installed something"
+            diff <(echo "$before") <(echo "$after") || true
+            exit 1
+          fi
+          echo "no packages installed — as intended"
+
+      - name: tests
+        run: python -m unittest discover -s tests -v
+
+      - name: script runs in isolated mode (proves no site-packages needed)
+        run: python -I scripts/oat_refresh.py --help
+
+      - name: missing config fails loudly rather than silently
+        run: |
+          set +e
+          out=$(env -u OAT_WORKER_URL -u OAT_ADMIN_TOKEN OAT_ENV_FILE=/nonexistent \
+                python scripts/oat_refresh.py --print-config 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          [ $code -ne 0 ] || { echo "::error::should have exited non-zero"; exit 1; }
+          echo "$out" | grep -q "OAT_WORKER_URL" || { echo "::error::error message unhelpful"; exit 1; }
+
+  secrets:
+    name: no secrets committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: no real worker/dashboard host in tracked files
+        run: |
+          hits=$(git ls-files -z | xargs -0 grep -nIoE 'https://[a-z0-9.-]+\.(workers|pages)\.dev' \
+                 | grep -vE 'your-worker|your-subdomain' || true)
+          if [ -n "$hits" ]; then echo "::error::real host committed"; echo "$hits"; exit 1; fi
+          echo "clean"
+
+      - name: no .env committed
+        run: |
+          tracked=$(git ls-files | grep -xE '\.env(\..+)?' | grep -vx '\.env\.example' || true)
+          if [ -n "$tracked" ]; then echo "::error::.env is tracked"; echo "$tracked"; exit 1; fi
+          echo "clean"
+
+      - name: no compiled bytecode (it embeds absolute source paths)
+        run: |
+          tracked=$(git ls-files | grep -E '\.pyc$|__pycache__' || true)
+          if [ -n "$tracked" ]; then echo "::error::bytecode committed"; echo "$tracked"; exit 1; fi
+          echo "clean"

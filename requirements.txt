@@ -1,0 +1,13 @@
+# oat-refresh has NO third-party runtime dependencies.
+#
+# Everything it needs — argparse, json, os, pathlib, re, sys, urllib — ships
+# with Python. `pip install -r requirements.txt` is a no-op, and this file
+# exists so you can confirm that rather than wonder.
+#
+# tests/test_oat_refresh.py::TestNoDependencies fails the build if a
+# third-party import is ever added without a deliberate decision.
+#
+# The real prerequisites are not pip packages. See README.md → Requirements:
+#   - Python 3.9+
+#   - Claude Code with the Google Drive connector (to read the roster sheet)
+#   - A deployed OAT Overview worker (see docs/API.md)

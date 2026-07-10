@@ -25,6 +25,16 @@ import sys
 import urllib.error
 import urllib.request
 
+# Every import above is standard library. This script has no third-party
+# dependencies and tests/test_oat_refresh.py enforces that.
+
+MIN_PYTHON = (3, 9)
+if sys.version_info < MIN_PYTHON:
+    # %-format, not an f-string: this must survive on the old interpreter it is
+    # complaining about. (Below 3.6 the file fails to parse before reaching here.)
+    sys.exit("oat-refresh needs Python %d.%d+ — running %s" % (
+        MIN_PYTHON[0], MIN_PYTHON[1], ".".join(str(p) for p in sys.version_info[:3])))
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Per-creator accent colours, matching the dashboard's palette.
@@ -103,6 +113,98 @@ def api(worker, path, method="GET", body=None, token=None, timeout=600):
         sys.exit(f"{method} {path} -> {e.reason}  (is OAT_WORKER_URL correct?)")
 
 
+def probe(worker, path, token=None, timeout=20):
+    """Like api(), but never exits. Returns (status_or_None, payload_or_error)."""
+    req = urllib.request.Request(worker + path, method="GET")
+    req.add_header("user-agent", "oat-refresh/1.0")
+    if token:
+        req.add_header("authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, None, timeout=timeout) as r:
+            try:
+                return r.status, json.loads(r.read().decode())
+            except json.JSONDecodeError:
+                return r.status, None
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except urllib.error.URLError as e:
+        return None, str(e.reason)
+
+
+# ── preflight ───────────────────────────────────────────────────────────────
+
+def run_check(worker, token, sheet_id):
+    """Verify every dependency this skill leans on, before it is needed.
+
+    Returns a process exit code. Never prints the token.
+    """
+    failures = 0
+    warnings = 0
+
+    def say(state, label, detail=""):
+        nonlocal failures, warnings
+        if state == "FAIL":
+            failures += 1
+        elif state == "WARN":
+            warnings += 1
+        print(f"  [{state:^4}] {label}" + (f" — {detail}" if detail else ""))
+
+    print("environment")
+    say("PASS", "python", ".".join(str(p) for p in sys.version_info[:3]))
+    say("PASS", "third-party packages", "none required")
+
+    print("\nconfiguration")
+    say("PASS", "OAT_WORKER_URL", worker)
+    say("PASS", "OAT_ADMIN_TOKEN", "set (not shown)")
+    if sheet_id:
+        say("PASS", "OAT_SHEET_ID", sheet_id)
+    else:
+        say("WARN", "OAT_SHEET_ID", "unset — the agent cannot find the roster sheet")
+
+    print("\nworker")
+    status, payload = probe(worker, "/api/health")
+    if status is None:
+        say("FAIL", "reachable", str(payload))
+        print("\nCannot reach the worker; skipping the remaining checks.")
+        return 1
+    say("PASS" if status == 200 else "FAIL", "GET /api/health", f"HTTP {status}")
+
+    # An unauthenticated admin route would be a serious hole. Check it directly.
+    status, _ = probe(worker, "/api/admin/state")
+    if status == 200:
+        say("FAIL", "admin routes guarded", "/api/admin/state answered WITHOUT a token")
+    else:
+        say("PASS", "admin routes guarded", f"unauthenticated -> HTTP {status}")
+
+    status, payload = probe(worker, "/api/admin/state", token=token)
+    if status == 200 and isinstance(payload, dict) and "creators" in payload and "accounts" in payload:
+        live = sum(1 for a in payload["accounts"] if a.get("active"))
+        say("PASS", "admin token accepted",
+            f"{len(payload['creators'])} creators, {len(payload['accounts'])} accounts ({live} live)")
+    elif status == 401:
+        say("FAIL", "admin token accepted", "HTTP 401 — OAT_ADMIN_TOKEN is wrong")
+    else:
+        say("FAIL", "GET /api/admin/state", f"HTTP {status}, unexpected shape")
+
+    status, payload = probe(worker, "/api/team/period?span=all")
+    if status == 200 and isinstance(payload, dict) and "posts" in payload.get("stats", {}):
+        say("PASS", "GET /api/team/period", f"{payload['stats']['posts']} posts all time")
+        # Informational, not a failure: the reference worker ships this way.
+        say("WARN", "public read", "/api/team/* needs no auth — anyone with the URL sees the data")
+    else:
+        say("FAIL", "GET /api/team/period", f"HTTP {status}, unexpected shape")
+
+    print("\nnot checkable from here")
+    print("  [ ?? ] Google Drive connector — the agent needs it to read the sheet")
+
+    print()
+    if failures:
+        print(f"{failures} failed, {warnings} warning(s) — fix the failures before refreshing")
+        return 1
+    print(f"all checks passed, {warnings} warning(s)")
+    return 0
+
+
 # ── sheet parsing ───────────────────────────────────────────────────────────
 
 def extract_handles(urls):
@@ -159,15 +261,19 @@ def main():
     ap.add_argument("--no-sync", action="store_true", help="reconcile only, skip the scrape")
     ap.add_argument("--print-config", action="store_true",
                     help="print worker url and sheet id (never the token) and exit")
+    ap.add_argument("--check", action="store_true",
+                    help="verify python, config, and the worker's routes, then exit")
     args = ap.parse_args()
 
     worker, token, sheet_id = config()
 
+    if args.check:
+        sys.exit(run_check(worker, token, sheet_id))
     if args.print_config:
         print(json.dumps({"worker": worker, "sheetId": sheet_id or None}, indent=2))
         return
     if not args.rows:
-        ap.error("--rows is required (or use --print-config)")
+        ap.error("--rows is required (or use --check / --print-config)")
 
     rows = json.loads(pathlib.Path(args.rows).read_text(encoding="utf-8"))
     state = api(worker, "/api/admin/state", token=token)
