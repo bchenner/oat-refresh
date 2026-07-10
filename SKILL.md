@@ -117,8 +117,14 @@ The script prints a plan, then a scrape table. Things that need a human:
   `POST /api/admin/accounts` with `{"id": "...", "handle": "...", "active": true}`.
 - `! @handle — sheet says X, DB says Y` — two people claim one handle. The
   script refuses to move it. Resolve with the user before touching anything.
-- `TRUNCATED` — an account outgrew `SCRAPE_MAX_PAGES`. Raise it in the worker's
-  `wrangler.toml` and redeploy, or the board silently misses older videos.
+- `TRUNCATED` — the account has more videos than `SCRAPE_MAX_PAGES` pulls. With
+  many accounts, `SCRAPE_MAX_PAGES` is kept low (e.g. 3 = newest 30) so the whole
+  sync fits the worker's request budget — so truncation is now the *normal* state,
+  not an error. It just means only the newest N videos got fresh snapshots;
+  already-stored older videos are preserved. Do **not** globally raise the page
+  count to "fix" it — that reintroduces the 502 that breaks the sync and the daily
+  cron. To deep-backfill one large new account, isolate it: temporarily set the
+  other accounts `active:false`, bump pages, sync, then reactivate them.
 - `N not served by TikTok` — the profile's own `video_count` exceeds what the
   feed returns. Usually deleted or private videos. A large gap is worth a look.
 - `FAILED` — a handle 404s or the API errored. Usually a typo in the sheet or a
